@@ -102,7 +102,7 @@ Use `editable = true` in uv sources: `sqler = { path = "deps/sqler", editable = 
 
 ## Active Roadmaps
 
-None currently active.
+- [ROADMAP.md](./ROADMAP.md) — current milestone: M2 (Soak Test)
 
 ---
 
