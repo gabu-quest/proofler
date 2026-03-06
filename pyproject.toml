@@ -1,0 +1,27 @@
+[project]
+name = "proofler"
+version = "0.1.0"
+description = "Cross-stack integration tests for the -ler ecosystem (sqler + qler + logler + procler + dagler)"
+requires-python = ">=3.12"
+dependencies = [
+    "sqler[pydantic]",
+    "qler",
+    "logler",
+    "procler",
+    "dagler",
+    "typing_extensions>=4.0",
+]
+
+[tool.uv.sources]
+sqler = { path = "deps/sqler", editable = true }
+qler = { path = "deps/qler", editable = true }
+procler = { path = "deps/procler", editable = true }
+dagler = { path = "deps/dagler", editable = true }
+
+# Not a distributable package — just a test harness
+[tool.hatch.build.targets.wheel]
+packages = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

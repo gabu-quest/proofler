@@ -1,0 +1,33 @@
+# Local session state (box-specific paths, Rust PATH, etc.)
+CLAUDE.local.md
+
+# Claude Code dev tooling
+.claude/
+
+# Dependency symlinks (user-specific, see README)
+deps/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# SQLite test artifacts
+*.db
+*.db-wal
+*.db-shm
+
+# Log test artifacts
+*.log
+
+# Build
+*.egg-info/
+dist/
+build/
+
+# Benchmark results (machine-specific)
+benchmarks/results/
+
+# OS
+.DS_Store
