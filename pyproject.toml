@@ -9,7 +9,9 @@ dependencies = [
     "logler",
     "procler",
     "dagler",
+    "httpx>=0.26.0",
     "typing_extensions>=4.0",
+    "argon2-cffi>=23.1.0",
 ]
 
 [tool.uv.sources]

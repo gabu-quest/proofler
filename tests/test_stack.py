@@ -1536,7 +1536,7 @@ async def _wait_for_jobs(queue: Queue, expected: int, timeout: float = 15.0,
 async def test_procler_foundations():
     section("14. procler foundations")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_procler_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_procler_")
     try:
         _init_procler(tmp_dir)
 
@@ -1591,7 +1591,7 @@ async def test_procler_foundations():
 async def test_procler_manages_worker():
     section("15. procler manages qler worker")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_procler_worker_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_procler_worker_")
     qler_db_path = os.path.join(tmp_dir, "qler_jobs.db")
     worker_harness = os.path.join(os.path.dirname(__file__), "worker_harness.py")
 
@@ -1690,7 +1690,7 @@ async def test_procler_manages_worker():
 async def test_procler_health_checks():
     section("16. procler health checks for qler worker")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_procler_health_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_procler_health_")
     qler_db_path = os.path.join(tmp_dir, "qler_jobs.db")
     worker_harness = os.path.join(os.path.dirname(__file__), "worker_harness.py")
 
@@ -1783,7 +1783,7 @@ async def test_procler_health_checks():
 async def test_procler_crash_recovery():
     section("17. Worker crash + procler detection")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_procler_crash_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_procler_crash_")
     qler_db_path = os.path.join(tmp_dir, "qler_jobs.db")
     worker_harness = os.path.join(os.path.dirname(__file__), "worker_harness.py")
 
@@ -1921,7 +1921,7 @@ async def test_procler_crash_recovery():
 async def test_procler_logler_observability():
     section("18. procler + logler observability")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_procler_obs_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_procler_obs_")
     qler_db_path = os.path.join(tmp_dir, "qler_jobs.db")
     worker_log_path = os.path.join(tmp_dir, "worker.log")
     worker_harness = os.path.join(os.path.dirname(__file__), "worker_harness.py")
@@ -2042,7 +2042,7 @@ async def test_procler_logler_observability():
 async def test_full_ler_stack():
     section("19. Full -ler stack roundtrip (sqler + qler + logler + procler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_full_stack_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_full_stack_")
     qler_db_path = os.path.join(tmp_dir, "qler_jobs.db")
     worker_log_path = os.path.join(tmp_dir, "worker.log")
     jsonl_path = None
@@ -2185,7 +2185,7 @@ async def test_full_ler_stack():
 async def test_job_archival():
     section("20. Job archival (UPGRADE-1)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_archival_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_archival_")
     db_path = os.path.join(tmp_dir, "archival.db")
 
     try:
@@ -2272,7 +2272,7 @@ async def test_job_archival():
 async def test_reverse_dep_index():
     section("21. Reverse dependency index + cascade (UPGRADE-2)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_depindex_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_depindex_")
     db_path = os.path.join(tmp_dir, "depindex.db")
 
     try:
@@ -2383,7 +2383,7 @@ async def test_reverse_dep_index():
 async def test_batch_enqueue():
     section("22. Batch enqueue (UPGRADE-4)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_batchenq_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_batchenq_")
     db_path = os.path.join(tmp_dir, "batchenq.db")
 
     try:
@@ -2499,7 +2499,7 @@ async def test_batch_enqueue():
 async def test_batch_claim():
     section("23. Batch claim (UPGRADE-5)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_batchclaim_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_batchclaim_")
     db_path = os.path.join(tmp_dir, "batchclaim.db")
 
     try:
@@ -2592,7 +2592,7 @@ async def test_batch_claim():
 async def test_combined_pipeline():
     section("24. Combined pipeline (all upgrades)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_combined_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_combined_")
     db_path = os.path.join(tmp_dir, "combined.db")
 
     try:
@@ -2772,7 +2772,7 @@ async def test_combined_pipeline():
 async def test_dagler_linear():
     section("25. Linear pipeline (dagler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag25_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag25_")
     db_path = os.path.join(tmp_dir, "dag25.db")
 
     try:
@@ -2859,7 +2859,7 @@ async def test_dagler_linear():
 async def test_dagler_diamond():
     section("26. Diamond DAG + multi-parent injection")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag26_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag26_")
     db_path = os.path.join(tmp_dir, "dag26.db")
 
     try:
@@ -2954,7 +2954,7 @@ async def test_dagler_diamond():
 async def test_dagler_failure_retry():
     section("27. Failure cascade + retry (dagler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag27_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag27_")
     db_path = os.path.join(tmp_dir, "dag27.db")
 
     try:
@@ -3075,7 +3075,7 @@ async def test_dagler_failure_retry():
 async def test_dagler_fanout():
     section("28. Fan-out/reduce (dagler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag28_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag28_")
     db_path = os.path.join(tmp_dir, "dag28.db")
 
     try:
@@ -3175,7 +3175,7 @@ async def test_dagler_fanout():
 async def test_dagler_logler():
     section("29. logler observability (dagler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag29_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag29_")
     db_path = os.path.join(tmp_dir, "dag29.db")
     jsonl_path = None
     jsonl_auto_path = None
@@ -3292,7 +3292,7 @@ async def test_dagler_logler():
 async def test_dagler_full_stack():
     section("30. Full stack roundtrip (dagler)")
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_dag30_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_dag30_")
     db_path = os.path.join(tmp_dir, "dag30.db")
 
     try:
@@ -3399,7 +3399,7 @@ async def test_m7_fanout_scaling():
 
     for n, timeout_budget in scale_points:
         tag = f"n={n}"
-        tmp_dir = tempfile.mkdtemp(prefix=f"proofler_s31_{n}_")
+        tmp_dir = tempfile.mkdtemp(prefix=f"lerproof_s31_{n}_")
         db_path = os.path.join(tmp_dir, f"s31_{n}.db")
         local_q = None
         worker = None
@@ -3502,7 +3502,7 @@ async def test_m7_concurrent_runs():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s32_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s32_")
     db_path = os.path.join(tmp_dir, "s32.db")
 
     try:
@@ -3628,7 +3628,7 @@ async def test_m7_multistage():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s33_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s33_")
     db_path = os.path.join(tmp_dir, "s33.db")
 
     try:
@@ -3739,7 +3739,7 @@ async def test_m7_memory_leak():
     import resource
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s34_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s34_")
     db_path = os.path.join(tmp_dir, "s34.db")
 
     def get_rss_mb() -> float:
@@ -3856,7 +3856,7 @@ async def test_m7_concurrency_sweep():
 
     for c in concurrency_levels:
         tag = f"c={c}"
-        tmp_dir = tempfile.mkdtemp(prefix=f"proofler_s35_c{c}_")
+        tmp_dir = tempfile.mkdtemp(prefix=f"lerproof_s35_c{c}_")
         db_path = os.path.join(tmp_dir, f"s35_c{c}.db")
 
         try:
@@ -3958,7 +3958,7 @@ async def test_m8_cancel_midflight():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s36_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s36_")
     db_path = os.path.join(tmp_dir, "s36.db")
 
     try:
@@ -4090,7 +4090,7 @@ async def test_m8_retry_fanout():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s37_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s37_")
     db_path = os.path.join(tmp_dir, "s37.db")
 
     try:
@@ -4222,7 +4222,7 @@ async def test_m8_idempotent():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s38_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s38_")
     db_path = os.path.join(tmp_dir, "s38.db")
 
     try:
@@ -4340,7 +4340,7 @@ async def test_m8_wait_timeout():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s39_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s39_")
     db_path = os.path.join(tmp_dir, "s39.db")
 
     try:
@@ -4439,7 +4439,7 @@ async def test_m8_concurrent_fanout():
 
     import shutil
 
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s40_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s40_")
     db_path = os.path.join(tmp_dir, "s40.db")
 
     try:
@@ -4589,7 +4589,7 @@ async def test_m8_10k_fanout():
 
     n = 10000
     timeout_budget = 600
-    tmp_dir = tempfile.mkdtemp(prefix="proofler_s41_")
+    tmp_dir = tempfile.mkdtemp(prefix="lerproof_s41_")
     db_path = os.path.join(tmp_dir, "s41.db")
     local_q = None
     worker = None

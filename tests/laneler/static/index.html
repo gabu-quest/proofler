@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>laneler</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: monospace; background: #1a1a2e; color: #e0e0e0; padding: 1rem; }
+  h1 { text-align: center; margin-bottom: 1rem; color: #e94560; }
+  .container { max-width: 800px; margin: 0 auto; }
+
+  /* Auth */
+  .auth-panel { background: #16213e; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  .auth-panel input { background: #0f3460; color: #e0e0e0; border: 1px solid #533483; padding: 0.4rem; margin: 0.2rem; border-radius: 4px; }
+  .auth-panel button { background: #e94560; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; margin: 0.2rem; }
+  .auth-panel button:hover { background: #c73e54; }
+  .status { color: #7ec8e3; font-size: 0.9rem; margin-top: 0.5rem; }
+
+  /* Lobby */
+  .lobby-panel { background: #16213e; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  .lobby-panel button { background: #533483; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; margin: 0.2rem; }
+  .lobby-panel select { background: #0f3460; color: #e0e0e0; border: 1px solid #533483; padding: 0.3rem; border-radius: 4px; }
+
+  /* Board */
+  .board { display: grid; grid-template-columns: repeat(7, 1fr); grid-template-rows: repeat(3, 1fr); gap: 4px; margin: 1rem 0; }
+  .tile { background: #16213e; border: 1px solid #533483; border-radius: 4px; padding: 0.5rem; min-height: 60px; font-size: 0.8rem; text-align: center; position: relative; }
+  .tile.base-a { border-color: #e94560; background: #2a1525; }
+  .tile.base-b { border-color: #0f3460; background: #0a1f3d; }
+  .tile.throne { border-color: #ffd700; background: #2a2a0a; }
+  .tile-label { font-size: 0.6rem; color: #888; position: absolute; top: 2px; left: 4px; }
+  .entities { margin-top: 0.5rem; }
+
+  /* Command */
+  .cmd-panel { background: #16213e; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+  .cmd-panel select, .cmd-panel input { background: #0f3460; color: #e0e0e0; border: 1px solid #533483; padding: 0.3rem; border-radius: 4px; margin: 0.2rem; }
+  .cmd-panel button { background: #e94560; color: white; border: none; padding: 0.4rem 0.8rem; border-radius: 4px; cursor: pointer; }
+
+  /* Info */
+  .info { background: #16213e; padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 0.5rem; font-size: 0.85rem; }
+  .info span { margin-right: 1rem; }
+  .gold { color: #ffd700; }
+  .xp { color: #7ec8e3; }
+  .hp-bar { display: inline-block; background: #333; border-radius: 2px; width: 40px; height: 8px; }
+  .hp-fill { display: inline-block; background: #4caf50; height: 100%; border-radius: 2px; }
+  .events { background: #0f3460; padding: 0.5rem; border-radius: 4px; max-height: 150px; overflow-y: auto; font-size: 0.75rem; margin-top: 0.5rem; }
+
+  #msg { color: #e94560; margin: 0.5rem 0; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>laneler</h1>
+
+  <!-- Auth -->
+  <div class="auth-panel" id="authPanel">
+    <div>
+      <input id="passphrase" type="password" placeholder="Passphrase (4+ chars)">
+      <input id="nickname" placeholder="Nickname (optional)">
+      <button onclick="doRegister()">Register</button>
+      <button onclick="doLogin()">Login</button>
+    </div>
+    <div class="status" id="authStatus"></div>
+  </div>
+
+  <!-- Lobby -->
+  <div class="lobby-panel hidden" id="lobbyPanel">
+    <button onclick="createGame()">Create Game</button>
+    <input id="joinId" placeholder="Game ID to join">
+    <button onclick="joinGame()">Join</button>
+    <div id="lobbyStatus" class="status"></div>
+    <div id="assignPanel" class="hidden" style="margin-top:0.5rem;">
+      <span>Assign heroes:</span>
+      Blade: <select id="bladeLane"><option>top</option><option>mid</option><option selected>bot</option></select>
+      Bolt: <select id="boltLane"><option>top</option><option selected>mid</option><option>bot</option></select>
+      Bastion: <select id="bastionLane"><option selected>top</option><option>mid</option><option>bot</option></select>
+      <button onclick="assignHeroes()">Assign</button>
+      <button onclick="startGame()">Start</button>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+
+  <!-- Game -->
+  <div class="hidden" id="gamePanel">
+    <div class="info" id="gameInfo"></div>
+    <div class="board" id="board"></div>
+
+    <div class="cmd-panel">
+      <select id="cmdHero"><option value="">Select Hero</option></select>
+      <select id="cmdAction">
+        <option value="move">Move</option>
+        <option value="dash">Dash</option>
+        <option value="execute">Execute</option>
+        <option value="zap">Zap</option>
+        <option value="storm">Storm</option>
+        <option value="shield">Shield</option>
+        <option value="fortify">Fortify</option>
+        <option value="potion">Potion</option>
+        <option value="upgrade_creeps">Upgrade Creeps</option>
+      </select>
+      <input id="cmdTarget" placeholder="Target (tile# or hero ID)">
+      <select id="cmdLane"><option value="">Lane</option><option>top</option><option>mid</option><option>bot</option></select>
+      <button onclick="sendCommand()">Send</button>
+    </div>
+    <div class="events" id="events"></div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let token = localStorage.getItem('laneler_token') || '';
+let playerId = localStorage.getItem('laneler_player') || '';
+let currentGame = '';
+let pollTimer = null;
+
+function headers() { return { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` }; }
+
+function msg(t) { document.getElementById('msg').textContent = t; }
+
+async function doRegister() {
+  const pp = document.getElementById('passphrase').value;
+  const nn = document.getElementById('nickname').value;
+  try {
+    const r = await fetch(`${API}/auth/register`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pp, nickname: nn || undefined }) });
+    const d = await r.json();
+    if (!r.ok) { msg(d.detail); return; }
+    token = d.token; playerId = d.player_id;
+    localStorage.setItem('laneler_token', token);
+    localStorage.setItem('laneler_player', playerId);
+    document.getElementById('authStatus').textContent = `Logged in as ${d.nickname} (${playerId.slice(0,8)})`;
+    document.getElementById('lobbyPanel').classList.remove('hidden');
+  } catch(e) { msg(e.message); }
+}
+
+async function doLogin() {
+  const pp = document.getElementById('passphrase').value;
+  try {
+    const r = await fetch(`${API}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ passphrase: pp }) });
+    const d = await r.json();
+    if (!r.ok) { msg(d.detail); return; }
+    token = d.token; playerId = d.player_id;
+    localStorage.setItem('laneler_token', token);
+    localStorage.setItem('laneler_player', playerId);
+    document.getElementById('authStatus').textContent = `Logged in as ${d.nickname}`;
+    document.getElementById('lobbyPanel').classList.remove('hidden');
+  } catch(e) { msg(e.message); }
+}
+
+async function createGame() {
+  const r = await fetch(`${API}/lobby/create`, { method: 'POST', headers: headers() });
+  const d = await r.json();
+  if (!r.ok) { msg(d.detail); return; }
+  currentGame = d.game_id;
+  document.getElementById('lobbyStatus').textContent = `Game created: ${currentGame}`;
+  document.getElementById('assignPanel').classList.remove('hidden');
+}
+
+async function joinGame() {
+  const gid = document.getElementById('joinId').value || currentGame;
+  const r = await fetch(`${API}/lobby/${gid}/join`, { method: 'POST', headers: headers() });
+  const d = await r.json();
+  if (!r.ok) { msg(d.detail); return; }
+  currentGame = gid;
+  document.getElementById('lobbyStatus').textContent = `Joined game: ${gid}`;
+  document.getElementById('assignPanel').classList.remove('hidden');
+}
+
+async function assignHeroes() {
+  const body = {
+    blade: document.getElementById('bladeLane').value,
+    bolt: document.getElementById('boltLane').value,
+    bastion: document.getElementById('bastionLane').value,
+  };
+  const r = await fetch(`${API}/lobby/${currentGame}/assign`, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+  const d = await r.json();
+  if (!r.ok) { msg(d.detail); return; }
+  msg('Heroes assigned!');
+}
+
+async function startGame() {
+  const r = await fetch(`${API}/lobby/${currentGame}/start`, { method: 'POST', headers: headers() });
+  const d = await r.json();
+  if (!r.ok) { msg(d.detail); return; }
+  msg('Game started!');
+  document.getElementById('gamePanel').classList.remove('hidden');
+  document.getElementById('lobbyPanel').classList.add('hidden');
+  startPolling();
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollState, 3000);
+  pollState();
+}
+
+async function pollState() {
+  if (!currentGame) return;
+  try {
+    const r = await fetch(`${API}/game/${currentGame}/state`, { headers: headers() });
+    if (!r.ok) return;
+    const s = await r.json();
+    renderBoard(s);
+  } catch(e) {}
+}
+
+const HERO_EMOJI = { blade: '\u2694\uFE0F', bolt: '\u26A1', bastion: '\uD83D\uDEE1\uFE0F' };
+
+function renderBoard(state) {
+  const info = document.getElementById('gameInfo');
+  info.innerHTML = `
+    <span>Tick: ${state.tick}/${20}</span>
+    <span>Status: ${state.status}</span>
+    <span class="gold">Gold A:${state.gold.a} B:${state.gold.b}</span>
+    <span class="xp">XP A:${state.xp.a} B:${state.xp.b}</span>
+    ${state.winner ? `<span>Winner: ${state.winner.slice(0,8)}</span>` : ''}
+  `;
+
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+  const lanes = ['top', 'mid', 'bot'];
+  const labels = ['\uD83C\uDFE0A', '1', '2', '\uD83D\uDC51', '2', '1', '\uD83C\uDFE0B'];
+
+  for (const lane of lanes) {
+    for (let tile = 0; tile < 7; tile++) {
+      const div = document.createElement('div');
+      div.className = 'tile';
+      if (tile === 0) div.classList.add('base-a');
+      else if (tile === 6) div.classList.add('base-b');
+      else if (tile === 3) div.classList.add('throne');
+
+      const base = state.bases.find(b => b.lane === lane && ((b.team === 'a' && tile === 0) || (b.team === 'b' && tile === 6)));
+
+      let label = `<div class="tile-label">${lane[0].toUpperCase()}${tile}</div>`;
+      let entities = '';
+
+      // Heroes on this tile
+      for (const h of state.heroes) {
+        if (h.lane === lane && h.tile === tile && !h.is_dead) {
+          const isMe = h.player_id === playerId;
+          entities += `<div title="${h.name} HP:${h.hp}/${h.max_hp} Lv${h.level}">${HERO_EMOJI[h.name] || h.name[0]}${isMe ? '*' : ''}</div>`;
+        }
+      }
+
+      // Creeps
+      let aCreeps = 0, bCreeps = 0;
+      for (const c of state.creeps) {
+        if (c.lane === lane && c.tile === tile) {
+          if (c.team === 'a') aCreeps++; else bCreeps++;
+        }
+      }
+      if (aCreeps) entities += `<div>\uD83D\uDD34x${aCreeps}</div>`;
+      if (bCreeps) entities += `<div>\uD83D\uDD35x${bCreeps}</div>`;
+
+      if (base) entities += `<div>\uD83C\uDFF0${base.hp}</div>`;
+
+      div.innerHTML = label + `<div class="entities">${entities}</div>`;
+      board.appendChild(div);
+    }
+  }
+
+  // Update hero select
+  const sel = document.getElementById('cmdHero');
+  const curVal = sel.value;
+  sel.innerHTML = '<option value="">Select Hero</option>';
+  for (const h of state.heroes) {
+    if (h.player_id === playerId) {
+      const opt = document.createElement('option');
+      opt.value = h.id;
+      opt.textContent = `${HERO_EMOJI[h.name]} ${h.name} (HP:${h.hp} Lv${h.level})`;
+      sel.appendChild(opt);
+    }
+  }
+  if (curVal) sel.value = curVal;
+
+  if (state.status === 'finished' && pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function sendCommand() {
+  const heroId = document.getElementById('cmdHero').value;
+  const action = document.getElementById('cmdAction').value;
+  const target = document.getElementById('cmdTarget').value;
+  const lane = document.getElementById('cmdLane').value;
+
+  const args = {};
+  if (target) {
+    if (/^\d+$/.test(target) && ['execute', 'zap'].includes(action)) {
+      args.target_hero_id = target;
+    } else {
+      args.target_tile = parseInt(target) || 0;
+    }
+  }
+  if (lane) args.lane = lane;
+
+  const body = { action, hero_id: heroId ? parseInt(heroId) : 0, args };
+  try {
+    const r = await fetch(`${API}/game/${currentGame}/command`, { method: 'POST', headers: headers(), body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!r.ok) { msg(d.detail); return; }
+    const ev = document.getElementById('events');
+    ev.innerHTML = `<div>Tick ${d.tick}: ${d.action} sent</div>` + ev.innerHTML;
+    msg('');
+  } catch(e) { msg(e.message); }
+}
+
+// Auto-show lobby if already logged in
+if (token) {
+  document.getElementById('authStatus').textContent = `Token loaded from storage`;
+  document.getElementById('lobbyPanel').classList.remove('hidden');
+}
+</script>
+</body>
+</html>

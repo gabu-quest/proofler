@@ -1,5 +1,5 @@
 """
-proofler stress — Scalable chaos soak test for the -ler order pipeline.
+lerproof stress — Scalable chaos soak test for the -ler order pipeline.
 
 Runs thousands of orders through an 8-task dependency pipeline with seeded
 chaos, worker churn, abrupt kills, and synthetic zombie injection.
@@ -9,6 +9,8 @@ Usage:
     uv run python tests/stress.py --orders 5000      # 5000 orders (~25 min)
     uv run python tests/stress.py --soak             # 30 min continuous waves
     uv run python tests/stress.py --soak --minutes 60
+    uv run python tests/stress.py --soak --minutes 1440   # 24h soak
+    uv run python tests/stress.py --soak --minutes 5 --trickle-rate 100 --archive-interval 10 --archive-after 30
     uv run python tests/stress.py --seed 42          # reproducible run
 """
 
@@ -246,8 +248,20 @@ TASKS_PER_ORDER = 8
 
 
 def get_rss_mb() -> float:
-    """Get current RSS in MB."""
+    """Peak RSS in MB (ru_maxrss — never decreases)."""
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+
+def get_current_rss_mb() -> float:
+    """Current RSS in MB via /proc/self/status (Linux). Falls back to peak."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return get_rss_mb()
 
 
 class RSSTracker:
@@ -261,7 +275,7 @@ class RSSTracker:
 
     def start(self):
         self._start = time.time()
-        self.samples.append((0.0, get_rss_mb()))
+        self.samples.append((0.0, get_current_rss_mb()))
         self._task = asyncio.create_task(self._sample_loop())
 
     async def _sample_loop(self):
@@ -269,11 +283,11 @@ class RSSTracker:
             while True:
                 await asyncio.sleep(self.interval)
                 elapsed = time.time() - self._start
-                self.samples.append((elapsed, get_rss_mb()))
+                self.samples.append((elapsed, get_current_rss_mb()))
         except asyncio.CancelledError:
             # Final sample
             elapsed = time.time() - self._start
-            self.samples.append((elapsed, get_rss_mb()))
+            self.samples.append((elapsed, get_current_rss_mb()))
 
     def stop(self):
         if self._task and not self._task.done():
@@ -566,25 +580,38 @@ async def run_stress(args: argparse.Namespace):
     if args.soak:
         # Soak: enqueue in waves via background task
         orders_enqueued = 0
-        wave_size = 25
-        wave_interval = 10.0
+        # Derive wave parameters from --trickle-rate (jobs/min)
+        orders_per_min = args.trickle_rate / TASKS_PER_ORDER
+        wave_size = max(1, int(orders_per_min / 6))  # ~6 waves/min
+        wave_interval = 60.0 / max(1, orders_per_min / wave_size)
         soak_deadline = time.time() + args.minutes * 60
+
+        print(f"  Trickle: {args.trickle_rate} jobs/min → "
+              f"{wave_size} orders/wave every {wave_interval:.1f}s")
 
         async def soak_enqueuer():
             nonlocal orders_enqueued
             while time.time() < soak_deadline:
-                for _ in range(wave_size):
-                    i = orders_enqueued
-                    await enqueue_order(q, i, seed + i, pipe_logger)
-                    orders_enqueued += 1
-                print(f"  Wave: enqueued {orders_enqueued} orders "
-                      f"({orders_enqueued * TASKS_PER_ORDER} jobs)")
+                try:
+                    for _ in range(wave_size):
+                        i = orders_enqueued
+                        await enqueue_order(q, i, seed + i, pipe_logger)
+                        orders_enqueued += 1
+                    print(f"  Wave: enqueued {orders_enqueued} orders "
+                          f"({orders_enqueued * TASKS_PER_ORDER} jobs)")
+                except Exception as exc:
+                    print(f"  [ENQUEUER ERROR] order {orders_enqueued}: "
+                          f"{type(exc).__name__}: {exc}")
+                    import traceback
+                    traceback.print_exc()
+                    await asyncio.sleep(5)  # backoff before retry
+                    continue
                 await asyncio.sleep(wave_interval)
 
         enqueue_task = asyncio.create_task(soak_enqueuer())
         # Give the first wave time to land before starting workers
         await asyncio.sleep(wave_interval + 1)
-        num_orders = orders_enqueued  # updated as soak proceeds
+        num_orders = orders_enqueued  # snapshot; re-assigned from orders_enqueued in the loop
     else:
         # Batch: enqueue all upfront
         num_orders = args.orders
@@ -599,9 +626,8 @@ async def run_stress(args: argparse.Namespace):
     print(f"  Total: {total_enqueued} jobs for {num_orders} orders")
 
     # -----------------------------------------------------------------------
-    # Phase 2: Execution with Worker Churn
+    # Phase 2: Execution
     # -----------------------------------------------------------------------
-    section("Phase 2: Execution (worker churn + chaos)")
 
     _tracemalloc_report("Phase 2 BASELINE (before any processing)")
 
@@ -612,131 +638,193 @@ async def run_stress(args: argparse.Namespace):
     total_zombies_recovered = 0
     jobs_resolved_per_cycle: list[int] = []
 
-    # Pick one random cycle for abrupt kill
-    abrupt_kill_cycle = rng.randint(1, 6)
+    # Hourly metrics for soak stability (M2)
+    hourly_metrics: list[dict] = []  # {hour, jobs, throughput, rss_mb, active, archived}
 
-    while True:
-        worker_cycles += 1
-        cycle_start = time.time()
+    if args.soak:
+        # -------------------------------------------------------------------
+        # Soak mode: stable worker + continuous enqueuing + hourly metrics
+        # -------------------------------------------------------------------
+        section("Phase 2: Execution (stable worker, soak mode)")
 
-        # Count pre-cycle state
-        pre_remaining = await count_pipeline_remaining(q)
-        if pre_remaining == 0 and enqueue_task is None:
-            break
+        soak_worker = Worker(
+            q, concurrency=args.concurrency, poll_interval=0.01,
+            shutdown_timeout=5.0,
+            archive_interval=args.archive_interval,
+            archive_after=args.archive_after,
+            memory_limit_mb=512,
+        )
+        soak_worker_task = asyncio.create_task(soak_worker.run())
 
-        # Determine run duration
-        duration = rng.uniform(30, 90)
+        _hour_start = time.time()
+        _hour_jobs_resolved = 0
+        _current_hour = 0
+        soak_deadline = pipeline_start + args.minutes * 60
 
-        # Create worker(s) (pool_size=4 via sqler connection pool + WAL mode)
-        num_workers = args.workers
-        workers = [
-            Worker(q, concurrency=args.concurrency, poll_interval=0.01, shutdown_timeout=5.0)
-            for _ in range(num_workers)
-        ]
+        # Collect metrics every 60s, print hourly summaries
+        while time.time() < soak_deadline:
+            await asyncio.sleep(60)
 
-        if worker_cycles == abrupt_kill_cycle:
-            # Abrupt kill: cancel all worker tasks directly
-            label = f"{num_workers}w" if num_workers > 1 else ""
-            print(f"  Cycle {worker_cycles}: ABRUPT KILL {label}after "
-                  f"{duration:.0f}s (pre: {pre_remaining} remaining)")
-            await asyncio.gather(*(abrupt_kill_worker(w, duration) for w in workers))
-            abrupt_kills += 1
-        else:
-            # Graceful stop
-            label = f"{num_workers}w " if num_workers > 1 else ""
-            print(f"  Cycle {worker_cycles}: {label}graceful run {duration:.0f}s "
-                  f"(pre: {pre_remaining} remaining)")
-            await asyncio.gather(*(run_worker_for(w, duration) for w in workers))
-            graceful_stops += 1
-
-        # Recover expired leases
-        recovered = await q.recover_expired_leases()
-        total_zombies_recovered += recovered
-
-        # Inject synthetic zombies
-        zombie_count = rng.randint(3, 5)
-        injected = await inject_zombies(q, rng, zombie_count)
-        total_zombies_injected += injected
-
-        # Recover the injected zombies
-        recovered2 = await q.recover_expired_leases()
-        total_zombies_recovered += recovered2
-
-        # Count post-cycle state
-        # In soak mode, update counts from enqueuer
-        if args.soak:
+            # Update live counts
             num_orders = orders_enqueued
             total_enqueued = orders_enqueued * TASKS_PER_ORDER
 
-        post_remaining = await count_pipeline_remaining(q)
-        resolved_this_cycle = pre_remaining - post_remaining
-        jobs_resolved_per_cycle.append(max(0, resolved_this_cycle))
+            remaining = await count_pipeline_remaining(q)
+            total_completed_active = await raw_count(q, "status IN ('completed','failed','cancelled')")
+            archived = await q.archive_count()
+            total_completed = total_completed_active + archived
+            current_rss = get_current_rss_mb()
 
-        cycle_elapsed = time.time() - cycle_start
-        print(f"         resolved ~{resolved_this_cycle} jobs in "
-              f"{cycle_elapsed:.1f}s | zombies: +{injected}/-{recovered + recovered2} | "
-              f"remaining: {post_remaining}")
+            elapsed_min = (time.time() - pipeline_start) / 60
+            enqueuer_status = "" if not enqueue_task.done() else " [ENQUEUER DEAD]"
+            print(f"  [{elapsed_min:.0f}m] enqueued: {total_enqueued} | "
+                  f"active: {remaining} | resolved: {total_completed} | "
+                  f"archived: {archived} | RSS: {current_rss:.0f} MB"
+                  f"{enqueuer_status}")
 
-        pipe_logger.info(
-            f"Cycle {worker_cycles}: resolved ~{resolved_this_cycle}, "
-            f"remaining {post_remaining}, zombies injected {injected}")
+            # Hourly boundary
+            if time.time() - _hour_start >= 3600:
+                _current_hour += 1
+                hour_elapsed = time.time() - _hour_start
+                hour_resolved = total_completed - _hour_jobs_resolved
+                hour_throughput = hour_resolved / (hour_elapsed / 60) if hour_elapsed > 0 else 0
+                hourly_metrics.append({
+                    "hour": _current_hour,
+                    "jobs": hour_resolved,
+                    "throughput": hour_throughput,
+                    "rss_mb": current_rss,
+                    "active": remaining,
+                    "archived": archived,
+                })
+                print(f"\n  === Hour {_current_hour} ===")
+                print(f"  Jobs: {hour_resolved} | Throughput: {hour_throughput:.0f}/min | "
+                      f"RSS: {current_rss:.0f} MB | Active: {remaining} | "
+                      f"Archived: {archived}\n")
+                _hour_start = time.time()
+                _hour_jobs_resolved = total_completed
 
-        # Memory profiling: snapshot every 5 cycles
-        if worker_cycles % 5 == 0:
-            _tracemalloc_report(f"Phase 2, Cycle {worker_cycles}, {post_remaining} remaining")
+            # Memory snapshot every 30 min
+            if int(elapsed_min) % 30 == 0 and int(elapsed_min) > 0:
+                _tracemalloc_report(f"Phase 2, {elapsed_min:.0f}m, {remaining} remaining")
 
-        # Drain detection
-        if post_remaining == 0:
-            if enqueue_task is None:
+        # Stop enqueuer
+        if not enqueue_task.done():
+            enqueue_task.cancel()
+            try:
+                await enqueue_task
+            except asyncio.CancelledError:
+                pass
+
+        # Final drain: let worker finish remaining jobs
+        print(f"  Soak complete, draining remaining jobs...")
+        drain_start = time.time()
+        while time.time() - drain_start < 300:
+            remaining = await count_pipeline_remaining(q)
+            if remaining == 0:
                 break
-            # Soak mode: check if enqueue is done
-            if enqueue_task.done():
-                # Final drain pass
-                drain_workers = [
-                    Worker(q, concurrency=args.concurrency, poll_interval=0.01, shutdown_timeout=5.0)
-                    for _ in range(args.workers)
-                ]
-                await asyncio.gather(*(run_worker_for(dw, 30.0) for dw in drain_workers))
-                await q.recover_expired_leases()
-                break
+            await asyncio.sleep(5)
 
-        # Safety valve: don't run forever in batch mode
-        # Scale with order count — logging I/O lowers throughput at scale
-        max_cycles = max(30, num_orders // 10)
-        if not args.soak and worker_cycles >= max_cycles:
-            print(f"  WARNING: hit {max_cycles} cycle limit, stopping")
-            break
-
-        # Soak time limit
-        if args.soak and time.time() > (pipeline_start + (args.minutes + 5) * 60):
-            print(f"  Soak time limit reached, draining...")
-            if not enqueue_task.done():
-                enqueue_task.cancel()
-                try:
-                    await enqueue_task
-                except asyncio.CancelledError:
-                    pass
-            # Final drain
-            drain_workers2 = [
-                Worker(q, concurrency=args.concurrency, poll_interval=0.01, shutdown_timeout=5.0)
-                for _ in range(args.workers)
-            ]
-            await asyncio.gather(*(run_worker_for(dw, 300.0, timeout=310.0) for dw in drain_workers2))
-            await q.recover_expired_leases()
-            break
-
-    # If soak enqueuer is still running, stop it
-    if enqueue_task is not None and not enqueue_task.done():
-        enqueue_task.cancel()
+        # Stop worker
+        soak_worker._running = False
         try:
-            await enqueue_task
-        except asyncio.CancelledError:
-            pass
+            await asyncio.wait_for(soak_worker_task, timeout=30.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            soak_worker_task.cancel()
+            try:
+                await soak_worker_task
+            except asyncio.CancelledError:
+                pass
 
-    # Final counts
-    if args.soak:
+        await q.recover_expired_leases()
+
         num_orders = orders_enqueued
-    total_enqueued = num_orders * TASKS_PER_ORDER
+        total_enqueued = orders_enqueued * TASKS_PER_ORDER
+        worker_cycles = 1
+        graceful_stops = 1
+
+    else:
+        # -------------------------------------------------------------------
+        # Batch mode: worker churn + chaos + zombie injection
+        # -------------------------------------------------------------------
+        section("Phase 2: Execution (worker churn + chaos)")
+
+        # Pick one random cycle for abrupt kill
+        abrupt_kill_cycle = rng.randint(1, 6)
+
+        while True:
+            worker_cycles += 1
+            cycle_start = time.time()
+
+            # Count pre-cycle state
+            pre_remaining = await count_pipeline_remaining(q)
+            if pre_remaining == 0 and enqueue_task is None:
+                break
+
+            # Determine run duration
+            duration = rng.uniform(30, 90)
+
+            # Create worker(s) (pool_size=4 via sqler connection pool + WAL mode)
+            num_workers = args.workers
+            workers = [
+                Worker(q, concurrency=args.concurrency, poll_interval=0.01, shutdown_timeout=5.0)
+                for _ in range(num_workers)
+            ]
+
+            if worker_cycles == abrupt_kill_cycle:
+                # Abrupt kill: cancel all worker tasks directly
+                label = f"{num_workers}w" if num_workers > 1 else ""
+                print(f"  Cycle {worker_cycles}: ABRUPT KILL {label}after "
+                      f"{duration:.0f}s (pre: {pre_remaining} remaining)")
+                await asyncio.gather(*(abrupt_kill_worker(w, duration) for w in workers))
+                abrupt_kills += 1
+            else:
+                # Graceful stop
+                label = f"{num_workers}w " if num_workers > 1 else ""
+                print(f"  Cycle {worker_cycles}: {label}graceful run {duration:.0f}s "
+                      f"(pre: {pre_remaining} remaining)")
+                await asyncio.gather(*(run_worker_for(w, duration) for w in workers))
+                graceful_stops += 1
+
+            # Recover expired leases
+            recovered = await q.recover_expired_leases()
+            total_zombies_recovered += recovered
+
+            # Inject synthetic zombies
+            zombie_count = rng.randint(3, 5)
+            injected = await inject_zombies(q, rng, zombie_count)
+            total_zombies_injected += injected
+
+            # Recover the injected zombies
+            recovered2 = await q.recover_expired_leases()
+            total_zombies_recovered += recovered2
+
+            post_remaining = await count_pipeline_remaining(q)
+            resolved_this_cycle = pre_remaining - post_remaining
+            jobs_resolved_per_cycle.append(max(0, resolved_this_cycle))
+
+            cycle_elapsed = time.time() - cycle_start
+            print(f"         resolved ~{resolved_this_cycle} jobs in "
+                  f"{cycle_elapsed:.1f}s | zombies: +{injected}/-{recovered + recovered2} | "
+                  f"remaining: {post_remaining}")
+
+            pipe_logger.info(
+                f"Cycle {worker_cycles}: resolved ~{resolved_this_cycle}, "
+                f"remaining {post_remaining}, zombies injected {injected}")
+
+            # Memory profiling: snapshot every 5 cycles
+            if worker_cycles % 5 == 0:
+                _tracemalloc_report(f"Phase 2, Cycle {worker_cycles}, {post_remaining} remaining")
+
+            # Drain detection
+            if post_remaining == 0:
+                break
+
+            # Safety valve: don't run forever
+            max_cycles = max(30, num_orders // 10)
+            if worker_cycles >= max_cycles:
+                print(f"  WARNING: hit {max_cycles} cycle limit, stopping")
+                break
+
     pipeline_elapsed = time.time() - pipeline_start
 
     print(f"\n  Execution complete: {worker_cycles} cycles "
@@ -751,6 +839,22 @@ async def run_stress(args: argparse.Namespace):
         await rss._task
     except asyncio.CancelledError:
         pass
+
+    # -----------------------------------------------------------------------
+    # Pre-Phase 3: Restore archived jobs so correctness checks see all jobs
+    # -----------------------------------------------------------------------
+    _soak_active_before_restore = 0
+    _soak_archive_before_restore = 0
+    if args.soak:
+        _soak_active_before_restore = await raw_count(q, "1=1")
+        _soak_archive_before_restore = await q.archive_count()
+        if _soak_archive_before_restore > 0:
+            # qler_jobs_archive has identical schema to qler_jobs (same promoted columns)
+            # Only terminal jobs (completed/failed/cancelled) are ever archived
+            await raw_query(q, "INSERT INTO qler_jobs SELECT * FROM qler_jobs_archive")
+            await raw_query(q, "DELETE FROM qler_jobs_archive")
+            restored = await raw_count(q, "1=1") - _soak_active_before_restore
+            print(f"  Restored {restored} archived jobs for correctness checks")
 
     # -----------------------------------------------------------------------
     # Phase 3: Correctness Assertions
@@ -801,9 +905,10 @@ async def run_stress(args: argparse.Namespace):
           AND status = 'failed'
     """)
     failed_charge_cids = [r[0] for r in failed_charge_rows]
+    min_charge_fails = min(5, max(1, num_orders // 20))
     check("Charge failures exist for cascade test",
-          len(failed_charge_cids) >= 5,
-          f"got {len(failed_charge_cids)}")
+          len(failed_charge_cids) >= min_charge_fails,
+          f"got {len(failed_charge_cids)}, need >= {min_charge_fails}")
     sample_charge = rng.sample(
         failed_charge_cids, min(20, len(failed_charge_cids)))
     cascade_charge_ok = True
@@ -970,21 +1075,59 @@ async def run_stress(args: argparse.Namespace):
           ordering_verified >= min_required,
           f"verified {ordering_verified}, skipped {ordering_skipped} (incomplete timing)")
 
-    # 9. Worker churn continuity
-    multi_cycle_work = sum(1 for r in jobs_resolved_per_cycle if r > 0)
-    min_active_cycles = max(2, worker_cycles // 2)
-    check(f"Worker churn: >= {min_active_cycles} of {worker_cycles} cycles resolved jobs",
-          multi_cycle_work >= min_active_cycles,
-          f"only {multi_cycle_work}/{worker_cycles} cycles resolved jobs")
+    # 9. Worker churn continuity (batch mode only — soak uses stable worker)
+    if not args.soak:
+        multi_cycle_work = sum(1 for r in jobs_resolved_per_cycle if r > 0)
+        min_active_cycles = max(2, worker_cycles // 2)
+        check(f"Worker churn: >= {min_active_cycles} of {worker_cycles} cycles resolved jobs",
+              multi_cycle_work >= min_active_cycles,
+              f"only {multi_cycle_work}/{worker_cycles} cycles resolved jobs")
 
-    # 10. Zombie recovery
-    min_zombies = max(1, worker_cycles * 2)
-    check(f"Synthetic zombies injected >= {min_zombies}",
-          total_zombies_injected >= min_zombies,
-          f"injected {total_zombies_injected}")
-    check("Zombie recovery rate >= 80%",
-          total_zombies_recovered >= total_zombies_injected * 0.8,
-          f"recovered {total_zombies_recovered}/{total_zombies_injected}")
+    # 10. Zombie recovery (batch mode only — soak doesn't inject zombies)
+    if not args.soak:
+        min_zombies = max(1, worker_cycles * 2)
+        check(f"Synthetic zombies injected >= {min_zombies}",
+              total_zombies_injected >= min_zombies,
+              f"injected {total_zombies_injected}")
+        check("Zombie recovery rate >= 80%",
+              total_zombies_recovered >= total_zombies_injected * 0.8,
+              f"recovered {total_zombies_recovered}/{total_zombies_injected}")
+
+    # -----------------------------------------------------------------------
+    # Phase 3b: Soak Stability Assertions
+    # -----------------------------------------------------------------------
+    if args.soak:
+        section("Phase 3b: Soak Stability Assertions")
+
+        # RSS growth <= 50 MB over entire soak
+        soak_rss_growth = rss.growth_mb
+        check("Soak: RSS growth <= 50 MB",
+              soak_rss_growth <= 50,
+              f"grew {soak_rss_growth:+.0f} MB")
+
+        # Each hour's throughput >= 80% of first hour
+        if len(hourly_metrics) >= 2:
+            first_tp = hourly_metrics[0]["throughput"]
+            tp_ok = True
+            tp_detail: list[str] = []
+            for hm in hourly_metrics[1:]:
+                if first_tp > 0 and hm["throughput"] < first_tp * 0.80:
+                    tp_ok = False
+                    tp_detail.append(
+                        f"hour {hm['hour']}: {hm['throughput']:.0f}/min "
+                        f"< 80% of hour 1 ({first_tp:.0f}/min)")
+            check("Soak: throughput stable (each hour >= 80% of first)",
+                  tp_ok, "; ".join(tp_detail[:3]))
+
+        # Active table <= 1000 rows before restore (archival working)
+        check("Soak: active table <= 1000 rows (pre-restore)",
+              _soak_active_before_restore <= 1000,
+              f"got {_soak_active_before_restore}")
+
+        # Archive table non-empty before restore
+        check("Soak: archive table non-empty (pre-restore)",
+              _soak_archive_before_restore > 0,
+              f"got {_soak_archive_before_restore}")
 
     # -----------------------------------------------------------------------
     # Phase 4: Observability (logler — full integration)
@@ -1121,8 +1264,9 @@ async def run_stress(args: argparse.Namespace):
         obs_entry_count = max(obs_entry_count, total_sql)
         if total_sql > 0:
             error_pct = error_sql / total_sql * 100
-            check("SQL: error rate 1-30%",
-                  1 <= error_pct <= 30,
+            min_error_pct = 0.5 if args.soak else 1
+            check(f"SQL: error rate {min_error_pct}-30%",
+                  min_error_pct <= error_pct <= 30,
                   f"{error_pct:.1f}% ({error_sql}/{total_sql})")
         else:
             check("SQL: log view has rows", False, f"got {total_sql}")
@@ -1292,6 +1436,13 @@ async def run_stress(args: argparse.Namespace):
     print(f"    Growth:        {rss.growth_mb:+.0f} MB over {len(rss.samples)} samples")
     if rss.peak_mb > 400:
         print(f"    WARNING:       Peak RSS exceeds 400 MB (Koyeb 512 MB limit)")
+    if hourly_metrics:
+        print()
+        print(f"  Hourly metrics (soak):")
+        print(f"    {'Hour':>4}  {'Jobs':>8}  {'Thr/min':>8}  {'RSS MB':>7}  {'Active':>7}  {'Archived':>9}")
+        for hm in hourly_metrics:
+            print(f"    {hm['hour']:>4}  {hm['jobs']:>8,}  {hm['throughput']:>8.0f}  "
+                  f"{hm['rss_mb']:>7.0f}  {hm['active']:>7,}  {hm['archived']:>9,}")
     print()
     print(f"  Production equivalence:")
     print(f"    ~{jobs_per_min:,.0f} background jobs/min")
@@ -1328,7 +1479,7 @@ async def run_stress(args: argparse.Namespace):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="proofler stress — scalable chaos soak test")
+        description="lerproof stress — scalable chaos soak test")
     parser.add_argument(
         "--orders", type=int, default=1000,
         help="Number of orders (default 1000, ignored in soak mode)")
@@ -1347,6 +1498,15 @@ def main():
     parser.add_argument(
         "--workers", type=int, default=1,
         help="Number of concurrent Worker instances sharing the same Queue (default 1)")
+    parser.add_argument(
+        "--trickle-rate", type=int, default=100,
+        help="Target jobs/minute in soak mode (default 100)")
+    parser.add_argument(
+        "--archive-interval", type=int, default=60,
+        help="Archival sweep interval in seconds (default 60)")
+    parser.add_argument(
+        "--archive-after", type=int, default=300,
+        help="Archive jobs older than N seconds (default 300)")
     args = parser.parse_args()
     asyncio.run(run_stress(args))
 
